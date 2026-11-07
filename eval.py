@@ -101,7 +101,8 @@ class Graph:
         if not sum(seeds.values()):
             return [t for t, _ in vector_hits[:k]]
         r = self.pagerank(seeds)[: len(self.titles)]
-        walk_top = [self.titles[i] for i in np.argsort(-r, kind="stable")[:k]]
+        reached = [i for i in np.argsort(-r, kind="stable")[:k] if r[i] > 0]
+        walk_top = [self.titles[i] for i in reached]
         return fuse([t for t, _ in vector_hits], walk_top)[:k]
 
 

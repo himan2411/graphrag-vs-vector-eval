@@ -28,12 +28,11 @@ assert (0, "mentions", ("adriana", "trigiani")) in g.relations
 assert (2, "about", ("adriana", "trigiani")) in g.relations
 
 # Vector search only found the film page. The walk should reach the director's page
-# through the film page's mention of her, ahead of the unrelated page listed before her.
+# through the film page's mention of her. The unrelated page is never reached, so it
+# must not be returned at all.
 q = "The director of Big Stone Gap is based in what New York neighborhood?"
 top = g.retrieve(q, [("Big Stone Gap (film)", 0.9)], k=3)
-assert top == ["Big Stone Gap (film)", "Adriana Trigiani", "Pompano Beach, Florida"], (
-    top
-)
+assert top == ["Big Stone Gap (film)", "Adriana Trigiani"], top
 
 # No entity in the question and no positive vector score: fall back to vector order.
 assert g.retrieve("nothing here", [("Pompano Beach, Florida", -0.1)], k=1) == [
