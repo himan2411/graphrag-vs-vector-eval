@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 from fastembed import TextEmbedding
 from scipy import sparse
+from scipy.stats import binomtest
 
 MODEL = "BAAI/bge-small-en-v1.5"
 KS = (2, 5, 10)
@@ -77,22 +78,22 @@ class Graph:
         adj = ((adj + adj.T) > 0).astype(float)
         deg = np.asarray(adj.sum(axis=0)).ravel()
         # Column-stochastic transition matrix for a random walk.
-        self.walk = adj @ sparse.diags(1.0 / np.maximum(deg, 1))
+        self.transition = adj @ sparse.diags(1.0 / np.maximum(deg, 1))
 
     def pagerank(self, seeds, iters=50):
         """Personalized PageRank: walk the graph, restart at the seed nodes."""
-        restart = np.zeros(self.walk.shape[0])
+        restart = np.zeros(self.transition.shape[0])
         for node, w in seeds.items():
             restart[node] += w
         restart /= restart.sum()
         r = restart.copy()
         for _ in range(iters):
-            r = DAMPING * (self.walk @ r) + (1 - DAMPING) * restart
+            r = DAMPING * (self.transition @ r) + (1 - DAMPING) * restart
         return r
 
-    def retrieve(self, question, vector_hits, k):
-        """Seed the walk with the question's entities and the top vector hits,
-        then fuse the walk's ranking with the vector ranking."""
+    def walk(self, question, vector_hits, k):
+        """Seed the walk with the question's entities and the top vector hits.
+        Returns up to k passages the walk reached, best first."""
         seeds = defaultdict(float)
         for e in find_entities(question, self.entity_id):
             seeds[self.entity_id[e]] += 1.0
@@ -102,7 +103,11 @@ class Graph:
             return [t for t, _ in vector_hits[:k]]
         r = self.pagerank(seeds)[: len(self.titles)]
         reached = [i for i in np.argsort(-r, kind="stable")[:k] if r[i] > 0]
-        walk_top = [self.titles[i] for i in reached]
+        return [self.titles[i] for i in reached]
+
+    def retrieve(self, question, vector_hits, k):
+        """The walk's ranking fused with the vector ranking."""
+        walk_top = self.walk(question, vector_hits, k)
         return fuse([t for t, _ in vector_hits], walk_top)[:k]
 
 
@@ -164,17 +169,35 @@ def embed_passages(model, corpus):
     return vecs
 
 
-def print_tables(rows, groups):
+def paired(rows, k):
+    """Questions where only one method found both gold passages, and an exact
+    two-sided sign test on those pairs."""
+    vec = sum(r["vector"][f"both@{k}"] and not r["graph"][f"both@{k}"] for r in rows)
+    gra = sum(r["graph"][f"both@{k}"] and not r["vector"][f"both@{k}"] for r in rows)
+    p = binomtest(gra, vec + gra).pvalue if vec + gra else 1.0
+    return vec, gra, p
+
+
+def print_tables(rows, groups, methods=("vector", "graph")):
     for label, keep in groups:
         subset = [r for r in rows if keep(r)]
         print(f"### {label} ({len(subset)} questions)\n")
-        print("| Metric | k | Vector | Graph |")
-        print("|---|---|---|---|")
-        for (name, v), (_, gr) in zip(
-            summarize(subset, "vector"), summarize(subset, "graph")
-        ):
-            for k, a, b in zip(KS, v, gr):
-                print(f"| {name} | {k} | {a} | {b} |")
+        print("| Metric | k | " + " | ".join(m.capitalize() for m in methods) + " |")
+        print("|---|---|" + "---|" * len(methods))
+        stats = [summarize(subset, m) for m in methods]
+        for i, (name, _) in enumerate(stats[0]):
+            for j, k in enumerate(KS):
+                cells = " | ".join(st[i][1][j] for st in stats)
+                print(f"| {name} | {k} | {cells} |")
+        pairs = [paired(subset, k) for k in KS]
+        for k, (vec, gra, _) in zip(KS, pairs):
+            pad = " |" * (len(methods) - 2)
+            print(f"| Both found by this method only | {k} | {vec} | {gra} |{pad}")
+        for k, (_, _, p) in zip(KS, pairs):
+            pad = " |" * (len(methods) - 2)
+            print(
+                f"| Sign test p, two-sided, on the pairs above | {k} | | {p:.2g} |{pad}"
+            )
         print()
 
 
@@ -213,6 +236,8 @@ def main():
         t = time.perf_counter()
         graph_top = graph.retrieve(q["question"], vector_hits, max(KS))
         graph_time += time.perf_counter() - t
+        # The walk alone, without fusion: only to show why I kept fusion.
+        walk_top = graph.walk(q["question"], vector_hits, max(KS))
 
         vector_top = [title for title, _ in vector_hits]
         rows.append(
@@ -225,7 +250,9 @@ def main():
                 "supporting_titles": q["supporting_titles"],
                 "vector_top10": vector_top,
                 "graph_top10": graph_top,
+                "walk_top10": walk_top,
                 "vector": score(q, vector_top, texts),
+                "walk": score(q, walk_top, texts),
                 "graph": score(q, graph_top, texts),
             }
         )
@@ -259,7 +286,12 @@ def main():
         ),
     )
     print("## Tune questions (used to pick the graph settings)\n")
-    print_tables([r for r in rows if r["split"] == "tune"], (("All", lambda r: True),))
+    print_tables(
+        [r for r in rows if r["split"] == "tune"],
+        (("All", lambda r: True),),
+        methods=("vector", "graph", "walk"),
+    )
+    print("Walk is the graph walk alone, without fusing it with the vector ranking.\n")
     print("## Rerun cost\n")
     print("| Step | Seconds |")
     print("|---|---|")
