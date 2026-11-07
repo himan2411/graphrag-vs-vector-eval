@@ -50,6 +50,6 @@ My first held-out run had a bug: passages the walk never reached could fill the 
 - The entities are Wikipedia article titles, matched as exact strings. My client system used a language model to extract entities and typed relations, which finds more kinds of relations than string matching does but costs money per document.
 - HotpotQA was built by following Wikipedia links, so a graph of title mentions suits it well. Documents with fewer clean entity names would give a smaller gain.
 
-## Data license
+## License
 
-The files in `data/` and `runs/` contain text from HotpotQA (Yang et al., 2018), which comes from Wikipedia and is licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+The code is MIT licensed, see [LICENSE](LICENSE). The files in `data/` and `runs/` contain text from HotpotQA (Yang et al., 2018), which comes from Wikipedia and is licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
